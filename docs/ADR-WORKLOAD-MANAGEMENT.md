@@ -1,40 +1,59 @@
-# ADR: Workload Management (KEDA + VPA)
+# ADR: Event-Driven Scaling with KEDA
 
 **Status:** Accepted
 **Date:** 2024-06-01
+**Updated:** 2026-01-16
 
 ## Context
 
-Need autoscaling based on both event-driven metrics and resource utilization.
+Need autoscaling based on event-driven metrics beyond CPU/memory.
 
 ## Decision
 
-Use KEDA for event-driven scaling and VPA for resource right-sizing.
+Use **KEDA** for event-driven horizontal scaling. VPA for vertical scaling is managed separately.
+
+## Architecture
+
+```mermaid
+flowchart TB
+    subgraph K8s["Kubernetes Cluster"]
+        KEDA[KEDA Operator]
+        SO[ScaledObject]
+        HPA[HPA]
+        Deploy[Deployment]
+    end
+
+    subgraph Sources["Event Sources"]
+        Redpanda[Redpanda]
+        Dragonfly[Dragonfly]
+        Prometheus[Prometheus]
+        Cron[Cron]
+    end
+
+    Sources --> KEDA
+    KEDA --> SO
+    SO --> HPA
+    HPA --> Deploy
+```
 
 ## Rationale
 
-### KEDA vs HPA
-
 | Feature | HPA | KEDA |
 |---------|-----|------|
-| CPU/Memory scaling | ✅ | ✅ |
-| Custom metrics | Limited | ✅ |
-| Event-driven | ❌ | ✅ |
-| Scale-to-zero | ❌ | ✅ |
-| Queue-based | ❌ | ✅ |
-
-### VPA Benefits
-
-- Automatic resource recommendation
-- Right-sizing for cost optimization
-- Works with KEDA (complementary)
+| CPU/Memory scaling | Yes | Yes |
+| Custom metrics | Limited | Yes |
+| Event-driven | No | Yes |
+| Scale-to-zero | No | Yes |
+| Queue-based | No | Yes |
 
 **Key Decision Factors:**
 - Scale-to-zero for cost savings
 - Queue-based scaling for workers
-- Resource optimization via VPA
+- Integrates with Redpanda and Dragonfly
 
-## KEDA Configuration
+## Configuration
+
+### Queue-Based Scaling (Dragonfly)
 
 ```yaml
 apiVersion: keda.sh/v1alpha1
@@ -55,46 +74,94 @@ spec:
         listLength: "5"
 ```
 
-## VPA Configuration
+### Kafka/Redpanda Scaling
 
 ```yaml
-apiVersion: autoscaling.k8s.io/v1
-kind: VerticalPodAutoscaler
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
 metadata:
-  name: <tenant>-api-vpa
+  name: <tenant>-consumer
   namespace: <tenant>-prod
 spec:
-  targetRef:
-    apiVersion: apps/v1
-    kind: Deployment
+  scaleTargetRef:
+    name: <tenant>-consumer
+  minReplicaCount: 0
+  maxReplicaCount: 20
+  triggers:
+    - type: kafka
+      metadata:
+        bootstrapServers: redpanda.databases:9092
+        consumerGroup: <tenant>-consumer
+        topic: <tenant>.events
+        lagThreshold: "100"
+```
+
+### Prometheus Metrics Scaling
+
+```yaml
+apiVersion: keda.sh/v1alpha1
+kind: ScaledObject
+metadata:
+  name: <tenant>-api
+  namespace: <tenant>-prod
+spec:
+  scaleTargetRef:
     name: <tenant>-api
-  updatePolicy:
-    updateMode: "Auto"
-  resourcePolicy:
-    containerPolicies:
-      - containerName: "*"
-        minAllowed:
-          cpu: 100m
-          memory: 128Mi
-        maxAllowed:
-          cpu: 2
-          memory: 4Gi
+  minReplicaCount: 2
+  maxReplicaCount: 10
+  triggers:
+    - type: prometheus
+      metadata:
+        serverAddress: http://mimir.observability:9090
+        query: sum(rate(http_requests_total{app="<tenant>-api"}[2m]))
+        threshold: "100"
 ```
 
 ## Scaling Patterns
 
-| Workload | Strategy | Scaler |
-|----------|----------|--------|
-| API | Request-based | KEDA (Prometheus) |
-| Workers | Queue-based | KEDA (Redis/Redpanda) |
-| Background | Cron-based | KEDA (Cron) |
-| All | Right-sizing | VPA |
+| Workload | Strategy | Scaler | Min | Max |
+|----------|----------|--------|-----|-----|
+| API | Request-based | Prometheus | 2 | 10 |
+| Workers | Queue-based | Redis/Kafka | 0 | 10 |
+| Consumers | Lag-based | Kafka | 0 | 20 |
+| Background | Cron-based | Cron | 0 | 1 |
+
+## KEDA + VPA Relationship
+
+```mermaid
+flowchart LR
+    subgraph Horizontal["Horizontal (KEDA)"]
+        KEDA[KEDA]
+        Replicas[Replica Count]
+    end
+
+    subgraph Vertical["Vertical (VPA)"]
+        VPA[VPA]
+        Resources[CPU/Memory]
+    end
+
+    KEDA --> Replicas
+    VPA --> Resources
+    Replicas --> Pod[Pod]
+    Resources --> Pod
+```
+
+- **KEDA**: Horizontal scaling (replica count)
+- **VPA**: Vertical scaling (resource requests) - see [ADR-VPA](../../vpa/docs/ADR-VPA.md)
 
 ## Consequences
 
-**Positive:** Scale-to-zero, event-driven, cost optimization
-**Negative:** Additional components, complexity
+**Positive:**
+- Scale-to-zero for cost savings
+- Event-driven scaling
+- Integrates with Redpanda/Dragonfly
+
+**Negative:**
+- Additional component to manage
+- ScaledObject per workload
 
 ## Related
 
-- [SPEC-AUTOSCALING-CONFIGURATION](./SPEC-AUTOSCALING-CONFIGURATION.md)
+- [ADR-VPA](../../vpa/docs/ADR-VPA.md)
+- [ADR-EVENT-STREAMING-REDPANDA](../../redpanda/docs/ADR-EVENT-STREAMING-REDPANDA.md)
+- [ADR-CACHING-DRAGONFLY](../../dragonfly/docs/ADR-CACHING-DRAGONFLY.md)
