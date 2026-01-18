@@ -25,7 +25,7 @@ flowchart TB
 
     subgraph Sources["Event Sources"]
         Redpanda[Redpanda]
-        Dragonfly[Dragonfly]
+        Valkey[Valkey]
         Prometheus[Prometheus]
         Cron[Cron]
     end
@@ -49,11 +49,11 @@ flowchart TB
 **Key Decision Factors:**
 - Scale-to-zero for cost savings
 - Queue-based scaling for workers
-- Integrates with Redpanda and Dragonfly
+- Integrates with Redpanda and Valkey
 
 ## Configuration
 
-### Queue-Based Scaling (Dragonfly)
+### Queue-Based Scaling (Valkey)
 
 ```yaml
 apiVersion: keda.sh/v1alpha1
@@ -69,7 +69,7 @@ spec:
   triggers:
     - type: redis
       metadata:
-        address: dragonfly.databases:6379
+        address: valkey.databases:6379
         listName: <tenant>-job-queue
         listLength: "5"
 ```
@@ -154,7 +154,7 @@ flowchart LR
 **Positive:**
 - Scale-to-zero for cost savings
 - Event-driven scaling
-- Integrates with Redpanda/Dragonfly
+- Integrates with Redpanda/Valkey
 
 **Negative:**
 - Additional component to manage
@@ -164,4 +164,4 @@ flowchart LR
 
 - [ADR-VPA](../../vpa/docs/ADR-VPA.md)
 - [ADR-EVENT-STREAMING-REDPANDA](../../redpanda/docs/ADR-EVENT-STREAMING-REDPANDA.md)
-- [ADR-CACHING-DRAGONFLY](../../dragonfly/docs/ADR-CACHING-DRAGONFLY.md)
+- [ADR-CACHING-VALKEY](../../valkey/docs/ADR-CACHING-VALKEY.md)
